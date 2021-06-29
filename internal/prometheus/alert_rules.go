@@ -22,6 +22,9 @@ type sloAlertRulesGenerator struct {
 // from an SLO.
 var SLOAlertRulesGenerator = sloAlertRulesGenerator{alertGenFunc: defaultSLOAlertGenerator}
 
+// SLOAlertRulesGeneratorChrono to create chronosphere compatible version
+var SLOAlertRulesGeneratorChrono = sloAlertRulesGenerator{alertGenFunc: chronoSLOAlertGenerator}
+
 func (s sloAlertRulesGenerator) GenerateSLOAlertRules(ctx context.Context, slo SLO, alerts alert.MWMBAlertGroup) ([]rulefmt.Rule, error) {
 	rules := []rulefmt.Rule{}
 
@@ -54,17 +57,18 @@ func defaultSLOAlertGenerator(slo SLO, sloAlert AlertMeta, quick, slow alert.MWM
 
 	// Render the alert template.
 	tplData := struct {
-		MetricFilter         string
-		ErrorBudgetRatio     float64
-		QuickShortMetric     string
-		QuickShortBurnFactor float64
-		QuickLongMetric      string
-		QuickLongBurnFactor  float64
-		SlowShortMetric      string
-		SlowShortBurnFactor  float64
-		SlowQuickMetric      string
-		SlowQuickBurnFactor  float64
-		WindowLabel          string
+		MetricFilter            string
+		ErrorBudgetRatio        float64
+		QuickShortMetric        string
+		QuickShortBurnFactor    float64
+		QuickLongMetric         string
+		QuickLongBurnFactor     float64
+		SlowShortMetric         string
+		SlowShortBurnFactor     float64
+		SlowQuickMetric         string
+		SlowQuickBurnFactor     float64
+		SlowCalculatedThreshold float64
+		WindowLabel             string
 	}{
 		MetricFilter:         metricFilter,
 		ErrorBudgetRatio:     quick.ErrorBudget / 100, // Any(quick or slow) should work because are the same.
@@ -105,6 +109,73 @@ func defaultSLOAlertGenerator(slo SLO, sloAlert AlertMeta, quick, slow alert.MWM
 	}, nil
 }
 
+// TODO: dedup, this is a quick hack
+func chronoSLOAlertGenerator(slo SLO, sloAlert AlertMeta, quick, slow alert.MWMBAlert) (*rulefmt.Rule, error) {
+	// Generate the filter labels based on the SLO ids.
+	metricFilter := labelsToPromFilter(slo.GetSLOIDPromLabels())
+
+	// Render the alert template.
+	tplData := struct {
+		MetricFilter            string
+		ErrorBudgetRatio        float64
+		QuickShortMetric        string
+		QuickShortBurnFactor    float64
+		QuickShortPreCalculate  float64
+		QuickLongMetric         string
+		QuickLongBurnFactor     float64
+		QuickLongPreCalculate   float64
+		SlowShortMetric         string
+		SlowShortBurnFactor     float64
+		SlowShortPreCalculate   float64
+		SlowQuickMetric         string
+		SlowQuickBurnFactor     float64
+		SlowCalculatedThreshold float64
+		SlowLongPreCalculate    float64
+		WindowLabel             string
+	}{
+		MetricFilter:           metricFilter,
+		ErrorBudgetRatio:       quick.ErrorBudget / 100, // Any(quick or slow) should work because are the same.
+		QuickShortMetric:       slo.GetSLIErrorMetric(quick.ShortWindow),
+		QuickShortBurnFactor:   quick.BurnRateFactor,
+		QuickShortPreCalculate: quick.BurnRateFactor * (quick.ErrorBudget / 100),
+		QuickLongMetric:        slo.GetSLIErrorMetric(quick.LongWindow),
+		QuickLongBurnFactor:    quick.BurnRateFactor,
+		QuickLongPreCalculate:  quick.BurnRateFactor * (quick.ErrorBudget / 100),
+		SlowShortMetric:        slo.GetSLIErrorMetric(slow.ShortWindow),
+		SlowShortBurnFactor:    slow.BurnRateFactor,
+		SlowShortPreCalculate:  slow.BurnRateFactor * (quick.ErrorBudget / 100),
+		SlowQuickMetric:        slo.GetSLIErrorMetric(slow.LongWindow),
+		SlowQuickBurnFactor:    slow.BurnRateFactor,
+		SlowLongPreCalculate:   slow.BurnRateFactor * (quick.ErrorBudget / 100),
+		WindowLabel:            sloWindowLabelName,
+	}
+	var expr bytes.Buffer
+	err := mwmbAlertTplCsphere.Execute(&expr, tplData)
+	if err != nil {
+		return nil, fmt.Errorf("could not render alert expression: %w", err)
+	}
+
+	// Add specific annotations.
+	severity := quick.Severity.String() // Any(quick or slow) should work because are the same.
+	extraAnnotations := map[string]string{
+		"title":   fmt.Sprintf("(%s) {{$labels.%s}} {{$labels.%s}} SLO error budget burn rate is too fast.", severity, sloServiceLabelName, sloNameLabelName),
+		"summary": fmt.Sprintf("{{$labels.%s}} {{$labels.%s}} SLO error budget burn rate is over expected.", sloServiceLabelName, sloNameLabelName),
+	}
+
+	// Add specific labels. We don't add the labels from the rules because we will
+	// inherit on the alerts, this way we avoid warnings of overrided labels.
+	extraLabels := map[string]string{
+		sloSeverityLabelName: severity,
+	}
+
+	return &rulefmt.Rule{
+		Alert:       sloAlert.Name,
+		Expr:        expr.String(),
+		Annotations: mergeLabels(extraAnnotations, sloAlert.Annotations),
+		Labels:      mergeLabels(extraLabels, sloAlert.Labels),
+	}, nil
+}
+
 // Multiburn multiwindow alert template.
 var mwmbAlertTpl = template.Must(template.New("mwmbAlertTpl").Option("missingkey=error").Parse(`(
     ({{ .QuickShortMetric }}{{ .MetricFilter}} > ({{ .QuickShortBurnFactor }} * {{ .ErrorBudgetRatio }}))
@@ -117,4 +188,19 @@ or ignoring ({{ .WindowLabel }})
     and ignoring ({{ .WindowLabel }})
     ({{ .SlowQuickMetric }}{{ .MetricFilter }} > ({{ .SlowQuickBurnFactor }} * {{ .ErrorBudgetRatio }}))
 )
+`))
+
+// Multiburn multiwindow alert template, chronosphere version.
+var mwmbAlertTplCsphere = template.Must(template.New("mwmbAlertTpl").Option("missingkey=error").Parse(`(
+    ({{ .QuickShortMetric }}{{ .MetricFilter}} > {{ .QuickShortPreCalculate }} )
+    and ignoring ({{ .WindowLabel }})
+    ({{ .QuickLongMetric }}{{ .MetricFilter}} > {{ .QuickLongPreCalculate }} )
+)
+or ignoring ({{ .WindowLabel }})
+(
+    ({{ .SlowShortMetric }}{{ .MetricFilter }} > {{ .SlowShortPreCalculate }} )
+    and ignoring ({{ .WindowLabel }})
+    ({{ .SlowQuickMetric }}{{ .MetricFilter }} > {{ .SlowLongPreCalculate }} )
+)
+> 0
 `))

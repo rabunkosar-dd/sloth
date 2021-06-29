@@ -97,7 +97,7 @@ func (v validateCommand) Run(ctx context.Context, config RootConfig) error {
 			// 1 - Raw Prometheus generator.
 			slos, promErr := promYAMLLoader.LoadSpec(ctx, []byte(data))
 			if promErr == nil {
-				err := generatePrometheus(ctx, log.Noop, false, false, v.extraLabels, *slos, io.Discard)
+				err := generatePrometheus(ctx, log.Noop, false, false, false, v.extraLabels, *slos, io.Discard)
 				if err != nil {
 					validation.Errs = []error{fmt.Errorf("could not generate Prometheus format rules: %w", err)}
 				}

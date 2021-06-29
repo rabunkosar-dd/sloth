@@ -23,6 +23,7 @@ type generateCommand struct {
 	slosOut           string
 	disableRecordings bool
 	disableAlerts     bool
+	chronoVersion     bool
 	extraLabels       map[string]string
 	sliPluginsPaths   []string
 }
@@ -37,6 +38,7 @@ func NewGenerateCommand(app *kingpin.Application) Command {
 	cmd.Flag("disable-recordings", "Disables recording rules generation.").BoolVar(&c.disableRecordings)
 	cmd.Flag("disable-alerts", "Disables alert rules generation.").BoolVar(&c.disableAlerts)
 	cmd.Flag("sli-plugins-path", "The path to SLI plugins (can be repeated), if not set it disable plugins support.").Short('p').StringsVar(&c.sliPluginsPaths)
+	cmd.Flag("chrono", "Create chronosphere compatible output.").Short('c').Required().BoolVar(&c.chronoVersion)
 
 	return c
 }
@@ -89,7 +91,7 @@ func (g generateCommand) Run(ctx context.Context, config RootConfig) error {
 		// 1 - Raw Prometheus generator.
 		slos, promErr := promYAMLLoader.LoadSpec(ctx, []byte(data))
 		if promErr == nil {
-			err := generatePrometheus(ctx, config.Logger, g.disableRecordings, g.disableAlerts, g.extraLabels, *slos, out)
+			err := generatePrometheus(ctx, config.Logger, g.disableRecordings, g.disableAlerts, g.chronoVersion, g.extraLabels, *slos, out)
 			if err != nil {
 				return fmt.Errorf("could not generate Prometheus format rules: %w", err)
 			}
@@ -117,7 +119,7 @@ func (g generateCommand) Run(ctx context.Context, config RootConfig) error {
 
 // generatePrometheus generates the SLOs based on a raw regular Prometheus spec format input and
 // outs a Prometheus raw yaml.
-func generatePrometheus(ctx context.Context, logger log.Logger, disableRecs, disableAlerts bool, extraLabels map[string]string, slos prometheus.SLOGroup, out io.Writer) error {
+func generatePrometheus(ctx context.Context, logger log.Logger, disableRecs, disableAlerts, chronoVersion bool, extraLabels map[string]string, slos prometheus.SLOGroup, out io.Writer) error {
 	logger.Infof("Generating from Prometheus spec")
 	info := info.Info{
 		Version: info.Version,
@@ -125,7 +127,7 @@ func generatePrometheus(ctx context.Context, logger log.Logger, disableRecs, dis
 		Spec:    prometheusv1.Version,
 	}
 
-	result, err := generateRules(ctx, logger, info, disableRecs, disableAlerts, extraLabels, slos)
+	result, err := generateRules(ctx, logger, info, disableRecs, disableAlerts, chronoVersion, extraLabels, slos)
 	if err != nil {
 		return err
 	}
@@ -157,7 +159,7 @@ func generateKubernetes(ctx context.Context, logger log.Logger, disableRecs, dis
 		Mode:    info.ModeCLIGenKubernetes,
 		Spec:    fmt.Sprintf("%s/%s", kubernetesv1.SchemeGroupVersion.Group, kubernetesv1.SchemeGroupVersion.Version),
 	}
-	result, err := generateRules(ctx, logger, info, disableRecs, disableAlerts, extraLabels, sloGroup.SLOGroup)
+	result, err := generateRules(ctx, logger, info, disableRecs, disableAlerts, false, extraLabels, sloGroup.SLOGroup)
 	if err != nil {
 		return err
 	}
@@ -181,7 +183,7 @@ func generateKubernetes(ctx context.Context, logger log.Logger, disableRecs, dis
 
 // generate is the main generator logic that all the spec types and storers share. Mainly
 // has the logic of the generate app service.
-func generateRules(ctx context.Context, logger log.Logger, info info.Info, disableRecs, disableAlerts bool, extraLabels map[string]string, slos prometheus.SLOGroup) (*generate.Response, error) {
+func generateRules(ctx context.Context, logger log.Logger, info info.Info, disableRecs, disableAlerts, chronoVersion bool, extraLabels map[string]string, slos prometheus.SLOGroup) (*generate.Response, error) {
 	// Disable recording rules if required.
 	var sliRuleGen generate.SLIRecordingRulesGenerator = generate.NoopSLIRecordingRulesGenerator
 	var metaRuleGen generate.MetadataRecordingRulesGenerator = generate.NoopMetadataRecordingRulesGenerator
@@ -194,6 +196,10 @@ func generateRules(ctx context.Context, logger log.Logger, info info.Info, disab
 	var alertRuleGen generate.SLOAlertRulesGenerator = generate.NoopSLOAlertRulesGenerator
 	if !disableAlerts {
 		alertRuleGen = prometheus.SLOAlertRulesGenerator
+	}
+
+	if chronoVersion {
+		alertRuleGen = prometheus.SLOAlertRulesGeneratorChrono
 	}
 
 	// Generate.
