@@ -38,7 +38,7 @@ func NewGenerateCommand(app *kingpin.Application) Command {
 	cmd.Flag("disable-recordings", "Disables recording rules generation.").BoolVar(&c.disableRecordings)
 	cmd.Flag("disable-alerts", "Disables alert rules generation.").BoolVar(&c.disableAlerts)
 	cmd.Flag("sli-plugins-path", "The path to SLI plugins (can be repeated), if not set it disable plugins support.").Short('p').StringsVar(&c.sliPluginsPaths)
-	cmd.Flag("chrono", "Create chronosphere compatible output.").Short('c').Required().BoolVar(&c.chronoVersion)
+	cmd.Flag("chrono", "Create chronosphere compatible output.").Short('c').BoolVar(&c.chronoVersion)
 
 	return c
 }
