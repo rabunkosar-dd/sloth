@@ -57,18 +57,17 @@ func defaultSLOAlertGenerator(slo SLO, sloAlert AlertMeta, quick, slow alert.MWM
 
 	// Render the alert template.
 	tplData := struct {
-		MetricFilter            string
-		ErrorBudgetRatio        float64
-		QuickShortMetric        string
-		QuickShortBurnFactor    float64
-		QuickLongMetric         string
-		QuickLongBurnFactor     float64
-		SlowShortMetric         string
-		SlowShortBurnFactor     float64
-		SlowQuickMetric         string
-		SlowQuickBurnFactor     float64
-		SlowCalculatedThreshold float64
-		WindowLabel             string
+		MetricFilter         string
+		ErrorBudgetRatio     float64
+		QuickShortMetric     string
+		QuickShortBurnFactor float64
+		QuickLongMetric      string
+		QuickLongBurnFactor  float64
+		SlowShortMetric      string
+		SlowShortBurnFactor  float64
+		SlowQuickMetric      string
+		SlowQuickBurnFactor  float64
+		WindowLabel          string
 	}{
 		MetricFilter:         metricFilter,
 		ErrorBudgetRatio:     quick.ErrorBudget / 100, // Any(quick or slow) should work because are the same.
